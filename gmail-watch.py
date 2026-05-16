@@ -227,10 +227,12 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
                     "Jaisu, you have a missed email",
                     f"From: {short_sender}\n{subject[:80]}"
                 )
-        known_ids = offline_ids
     else:
         print(f"{label} No emails missed in the last 48h.")
-        known_ids = fetch_unseen_ids(conn)
+
+    # Baseline is ALL current unread — prevents older emails from
+    # appearing as "new" on the next poll and flooding notifications.
+    known_ids = fetch_unseen_ids(conn)
 
     save_last_run(account)
     print(f"{label} Monitoring — polling every {interval}s\n")
