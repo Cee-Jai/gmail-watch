@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from email import message_from_bytes
 from email.header import decode_header
 
@@ -51,23 +51,70 @@ def fmt_time():
 
 
 def desktop_notify(title: str, body: str):
+    # Tkinter popup — guaranteed to appear and stay until dismissed.
+    # Runs as a detached subprocess so gmail-watch keeps polling.
+    script = f"""
+import tkinter as tk
+import os
+os.environ.setdefault("DISPLAY", ":0")
+root = tk.Tk()
+root.title("gmail-watch")
+root.configure(bg="#1a1a2e")
+root.attributes("-topmost", True)
+root.resizable(False, False)
+root.geometry("380x160")
+root.update_idletasks()
+x = (root.winfo_screenwidth() - 380) // 2
+root.geometry(f"380x160+{{x}}+40")
+tk.Label(root, text="✉  " + {repr(title)},
+         bg="#1a1a2e", fg="#e94560",
+         font=("Sans", 13, "bold"), anchor="w").pack(fill="x", padx=16, pady=(18,4))
+tk.Label(root, text={repr(body)},
+         bg="#1a1a2e", fg="#ffffff",
+         font=("Sans", 11), anchor="w", justify="left", wraplength=340).pack(fill="x", padx=16)
+tk.Button(root, text="Dismiss", command=root.destroy,
+          bg="#e94560", fg="white",
+          font=("Sans", 10, "bold"),
+          relief="flat", padx=16, pady=4).pack(pady=14)
+root.mainloop()
+"""
+    env = os.environ.copy()
+    env.setdefault("DISPLAY", ":0")
     try:
-        subprocess.run(
-            [
-                "notify-send",
-                "--app-name", "gmail-watch",
-                "--urgency", "critical",
-                "--expire-time", "0",
-                "--hint", "boolean:resident:true",
-                "--hint", "boolean:transient:false",
-                "--icon", "mail-unread",
-                title,
-                body,
-            ],
-            timeout=5, check=False
+        subprocess.Popen(
+            [sys.executable, "-c", script],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-    except FileNotFoundError:
-        pass
+    except Exception:
+        subprocess.Popen(
+            ["xmessage", "-buttons", "Dismiss:0", f"{title}\n\n{body}"],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+
+# ── last-run timestamp ────────────────────────────────────────────────────────
+
+def timestamp_path(account: str) -> str:
+    return os.path.join(CONFIG_DIR, f"{account}.last_run")
+
+
+def load_last_run(account: str) -> datetime | None:
+    path = timestamp_path(account)
+    if not os.path.exists(path):
+        return None
+    try:
+        ts = float(open(path).read().strip())
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def save_last_run(account: str):
+    path = timestamp_path(account)
+    with open(path, "w") as f:
+        f.write(str(time.time()))
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -133,14 +180,19 @@ def connect(email, password):
     return conn
 
 
-def fetch_unseen_ids(conn):
-    _, data = conn.search(None, "UNSEEN")
+def fetch_unseen_ids(conn, since: datetime | None = None):
+    if since:
+        # IMAP SINCE uses day granularity — fetch since that date then filter by UID
+        date_str = since.strftime("%d-%b-%Y")
+        _, data = conn.search(None, f'(UNSEEN SINCE "{date_str}")')
+    else:
+        _, data = conn.search(None, "UNSEEN")
     return set(data[0].split())
 
 
 def fetch_email_preview(conn, msg_id):
     try:
-        _, data = conn.fetch(msg_id, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+        _, data = conn.fetch(msg_id, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
         msg = message_from_bytes(data[0][1])
         sender  = decode_str(msg.get("From", "Unknown"))
         subject = decode_str(msg.get("Subject", "(no subject)"))
@@ -158,11 +210,36 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
         print(f"{label} Connection failed: {e}", file=sys.stderr)
         return
 
-    known_ids = fetch_unseen_ids(conn)
-    print(f"{label} Connected — {len(known_ids)} unread at start")
+    # Check for emails that arrived while the PC was off
+    last_run = load_last_run(account)
+    if last_run:
+        offline_ids = fetch_unseen_ids(conn, since=last_run)
+        if offline_ids:
+            print(f"{label} {len(offline_ids)} unread email(s) arrived while offline — notifying...")
+            for msg_id in sorted(offline_ids):
+                sender, subject = fetch_email_preview(conn, msg_id)
+                short_sender = sender.split("<")[0].strip() or sender
+                print(f"{label} [offline] {short_sender}: {subject[:60]}")
+                if not quiet:
+                    desktop_notify(
+                        f"Missed Gmail ({account})",
+                        f"From: {short_sender}\n{subject[:80]}"
+                    )
+            known_ids = offline_ids
+        else:
+            print(f"{label} No emails missed while offline.")
+            known_ids = fetch_unseen_ids(conn)
+    else:
+        known_ids = fetch_unseen_ids(conn)
+        print(f"{label} Connected — {len(known_ids)} unread at start (first run, no offline check)")
+
+    save_last_run(account)
+    print(f"{label} Monitoring — polling every {interval}s\n")
 
     while True:
         time.sleep(interval)
+        save_last_run(account)  # update heartbeat so last_run stays fresh
+
         try:
             conn.noop()
         except Exception:
@@ -224,7 +301,6 @@ def main():
         run_setup(account)
         return
 
-    # determine which accounts to monitor
     if args.account:
         accounts = [args.account]
     else:
@@ -234,7 +310,6 @@ def main():
             sys.exit(1)
 
     print(f"[gmail-watch] Monitoring {len(accounts)} account(s): {', '.join(accounts)}")
-    print(f"[gmail-watch] Polling every {args.interval}s — press Ctrl+C to stop\n")
 
     if len(accounts) == 1:
         email, password = load_account(accounts[0])
