@@ -212,12 +212,12 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
 
     # Check for emails missed while offline — capped at 24 hours back
     last_run = load_last_run(account)
-    cutoff_24h = datetime.now(tz=timezone.utc) - timedelta(hours=24)
-    cutoff = max(last_run, cutoff_24h) if last_run else cutoff_24h
+    cutoff_48h = datetime.now(tz=timezone.utc) - timedelta(hours=48)
+    cutoff = max(last_run, cutoff_48h) if last_run else cutoff_48h
 
     offline_ids = fetch_unseen_ids(conn, since=cutoff)
     if offline_ids:
-        print(f"{label} {len(offline_ids)} unread email(s) in last 24h missed while offline — notifying...")
+        print(f"{label} {len(offline_ids)} unread email(s) in last 48h missed while offline — notifying...")
         for msg_id in sorted(offline_ids):
             sender, subject = fetch_email_preview(conn, msg_id)
             short_sender = sender.split("<")[0].strip() or sender
@@ -229,7 +229,7 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
                 )
         known_ids = offline_ids
     else:
-        print(f"{label} No emails missed in the last 24h.")
+        print(f"{label} No emails missed in the last 48h.")
         known_ids = fetch_unseen_ids(conn)
 
     save_last_run(account)
