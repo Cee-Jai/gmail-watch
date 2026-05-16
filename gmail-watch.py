@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email import message_from_bytes
 from email.header import decode_header
 
@@ -210,28 +210,27 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
         print(f"{label} Connection failed: {e}", file=sys.stderr)
         return
 
-    # Check for emails that arrived while the PC was off
+    # Check for emails missed while offline — capped at 24 hours back
     last_run = load_last_run(account)
-    if last_run:
-        offline_ids = fetch_unseen_ids(conn, since=last_run)
-        if offline_ids:
-            print(f"{label} {len(offline_ids)} unread email(s) arrived while offline — notifying...")
-            for msg_id in sorted(offline_ids):
-                sender, subject = fetch_email_preview(conn, msg_id)
-                short_sender = sender.split("<")[0].strip() or sender
-                print(f"{label} [offline] {short_sender}: {subject[:60]}")
-                if not quiet:
-                    desktop_notify(
-                        f"Jaisu, you have a missed email",
-                        f"From: {short_sender}\n{subject[:80]}"
-                    )
-            known_ids = offline_ids
-        else:
-            print(f"{label} No emails missed while offline.")
-            known_ids = fetch_unseen_ids(conn)
+    cutoff_24h = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    cutoff = max(last_run, cutoff_24h) if last_run else cutoff_24h
+
+    offline_ids = fetch_unseen_ids(conn, since=cutoff)
+    if offline_ids:
+        print(f"{label} {len(offline_ids)} unread email(s) in last 24h missed while offline — notifying...")
+        for msg_id in sorted(offline_ids):
+            sender, subject = fetch_email_preview(conn, msg_id)
+            short_sender = sender.split("<")[0].strip() or sender
+            print(f"{label} [offline] {short_sender}: {subject[:60]}")
+            if not quiet:
+                desktop_notify(
+                    "Jaisu, you have a missed email",
+                    f"From: {short_sender}\n{subject[:80]}"
+                )
+        known_ids = offline_ids
     else:
+        print(f"{label} No emails missed in the last 24h.")
         known_ids = fetch_unseen_ids(conn)
-        print(f"{label} Connected — {len(known_ids)} unread at start (first run, no offline check)")
 
     save_last_run(account)
     print(f"{label} Monitoring — polling every {interval}s\n")
