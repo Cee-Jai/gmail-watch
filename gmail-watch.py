@@ -222,7 +222,7 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
                 print(f"{label} [offline] {short_sender}: {subject[:60]}")
                 if not quiet:
                     desktop_notify(
-                        f"Missed Gmail ({account})",
+                        f"Jaisu, you have a missed email",
                         f"From: {short_sender}\n{subject[:80]}"
                     )
             known_ids = offline_ids
@@ -263,7 +263,7 @@ def monitor_account(account: str, email: str, password: str, interval: int, quie
                 print(f"[{fmt_time()}] {label} New email — {short_sender}: {subject[:60]}")
                 if not quiet:
                     desktop_notify(
-                        f"New Gmail ({account})",
+                        "Jaisu, read this",
                         f"From: {short_sender}\n{subject[:80]}"
                     )
             known_ids = current_ids
