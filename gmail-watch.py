@@ -79,7 +79,8 @@ tk.Button(root, text="Dismiss", command=root.destroy,
 root.mainloop()
 """
     env = os.environ.copy()
-    env.setdefault("DISPLAY", ":0")
+    env["DISPLAY"] = ":0"
+    env["XAUTHORITY"] = os.path.expanduser("~/.Xauthority")
     try:
         subprocess.Popen(
             [sys.executable, "-c", script],
